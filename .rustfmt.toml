@@ -1,0 +1,4 @@
+edition = "2021"
+fn_call_width = 100
+struct_lit_width = 80
+tab_spaces = 2
