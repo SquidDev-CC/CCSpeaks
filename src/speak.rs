@@ -22,11 +22,10 @@ unsafe extern "C" fn synth_callback(
     return 0;
   }
 
-  // Calculate the length of the events array
-  let mut userdata = None;
+  let mut buffer = None;
   loop {
     if let Some(audio_buffer) = ((*events).user_data as *mut AudioStream).as_mut() {
-      userdata = Some(audio_buffer)
+      buffer = Some(audio_buffer)
     }
 
     if (*events).type_ == espeak_EVENT_TYPE_espeakEVENT_LIST_TERMINATED {
@@ -36,7 +35,7 @@ unsafe extern "C" fn synth_callback(
     events = events.add(1);
   }
 
-  if let Some(buffer) = userdata {
+  if let Some(buffer) = buffer {
     if sample_count > 0 {
       buffer.extend_from_slice(std::slice::from_raw_parts(wav, sample_count as usize));
     }

@@ -1,4 +1,4 @@
-# CC: Speaks
+# CCSpeaks
 A very silly TTS server using [espeak-ng](https://github.com/espeak-ng/espeak-ng/).
 
 ## Try it
