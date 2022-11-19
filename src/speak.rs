@@ -1,13 +1,15 @@
 #![allow(non_upper_case_globals)]
 
 use espeakng_sys::*;
-use std::ffi::{c_int, c_short, c_void, CString};
+use std::ffi::CString;
+use std::os::raw::{c_int, c_short, c_void};
 
 /// The name of the voice to use
-const VOICE_NAME: &str = "English";
+pub const DEFAULT_VOICE: &str = "en";
 
 pub struct Speak {
   sample_rate: i32,
+  voice: Option<String>,
   _marker: std::marker::PhantomData<std::cell::Cell<()>>,
 }
 
@@ -51,17 +53,44 @@ impl Speak {
       espeak_Initialize(espeak_AUDIO_OUTPUT_AUDIO_OUTPUT_SYNCHRONOUS, 0, std::ptr::null(), 0)
     };
 
-    let voice = CString::new(VOICE_NAME).expect("Failed to convert &str to CString");
+    let voice = CString::new(DEFAULT_VOICE).expect("Failed to convert &str to CString");
     unsafe {
-      espeak_SetVoiceByName(voice.as_ptr());
+      if espeak_SetVoiceByName(voice.as_ptr()) != espeak_ERROR_EE_OK {
+        panic!("Failed to set default voice");
+      }
+
       espeak_SetSynthCallback(Some(synth_callback))
     }
 
-    Speak { sample_rate, _marker: std::marker::PhantomData }
+    Speak {
+      sample_rate,
+      voice: Some(DEFAULT_VOICE.into()),
+      _marker: std::marker::PhantomData,
+    }
   }
 
   pub fn sample_rate(&self) -> i32 {
     self.sample_rate
+  }
+
+  pub fn set_voice(&mut self, voice: &str) -> std::result::Result<(), &'static str> {
+    if let Some(current_voice) = &self.voice {
+      if current_voice == voice {
+        return Ok(());
+      }
+    }
+
+    log::info!("Setting voice to {}", voice);
+    let c_voice = CString::new(voice).map_err(|_| "Invalid language name")?;
+    let err = unsafe { espeak_SetVoiceByName(c_voice.as_ptr()) };
+
+    let (res, new_voice) = match err {
+      espeak_ERROR_EE_OK => (Ok(()), Some(voice.into())),
+      espeak_ERROR_EE_NOT_FOUND => (Err("Unknown language"), None),
+      _ => (Err("An unknown error occurred"), None),
+    };
+    self.voice = new_voice;
+    res
   }
 
   pub fn speak(&mut self, text: &str) -> std::result::Result<AudioStream, &'static str> {

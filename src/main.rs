@@ -28,30 +28,54 @@ fn handle_request(
   sample_rate: usize,
   request: Request<Body>,
 ) -> Response<Body> {
-  let text = request
-    .uri()
-    .query()
-    .and_then(|x| form_urlencoded::parse(x.as_bytes()).find(|(k, _)| k == "text"))
-    .map(|(_, v)| v);
-  let text = match text {
+  let mut text = None;
+  let mut voice = None;
+  for (k, v) in form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes()) {
+    match k.as_ref() {
+      "text" => text = Some(v),
+      "voice" => voice = Some(v),
+      _ => return bad_request("Unknown query argument"),
+    }
+  }
+
+  let text: &str = match &text {
     None => return bad_request("No text= query parameter"),
+    Some(x) => x,
+  };
+  let voice = match &voice {
+    None => speak::DEFAULT_VOICE,
     Some(x) => x,
   };
 
   if text.len() > MAX_SIZE {
     return bad_request("Text is too long.");
-  } else if !text.is_ascii() {
-    return bad_request("Text must be ASCII only.");
+  } else if text.contains('\0') {
+    return bad_request("Text cannot contain special characters.");
+  }
+
+  if voice.len() > MAX_SIZE {
+    return bad_request("Voice is too long.");
+  } else if !voice.is_ascii() {
+    return bad_request("Voice must be ASCII only.");
   }
 
   info!("Speaking {:?}", text);
-  let wav = match speak.lock().speak(&text) {
-    Ok(result) => result,
-    Err(e) => {
-      return Response::builder()
-        .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .body(format!("Failed to generate audio ({})", e).into())
-        .unwrap()
+  let wav = {
+    let mut speak = speak.lock();
+
+    match speak.set_voice(voice) {
+      Ok(()) => (),
+      Err(err) => return bad_request(err),
+    }
+
+    match speak.speak(text) {
+      Ok(result) => result,
+      Err(e) => {
+        return Response::builder()
+          .status(StatusCode::INTERNAL_SERVER_ERROR)
+          .body(format!("Failed to generate audio ({})", e).into())
+          .unwrap()
+      }
     }
   };
 
