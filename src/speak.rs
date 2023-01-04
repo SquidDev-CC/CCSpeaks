@@ -8,7 +8,6 @@ use std::os::raw::{c_int, c_short, c_void};
 pub const DEFAULT_VOICE: &str = "en";
 
 pub struct Speak {
-  sample_rate: i32,
   voice: Option<String>,
   _marker: std::marker::PhantomData<std::cell::Cell<()>>,
 }
@@ -49,7 +48,7 @@ unsafe extern "C" fn synth_callback(
 impl Speak {
   /// Initialise espeak
   pub fn init() -> Self {
-    let sample_rate = unsafe {
+    unsafe {
       espeak_Initialize(espeak_AUDIO_OUTPUT_AUDIO_OUTPUT_SYNCHRONOUS, 0, std::ptr::null(), 0)
     };
 
@@ -62,21 +61,17 @@ impl Speak {
       espeak_SetSynthCallback(Some(synth_callback))
     }
 
-    Speak {
-      sample_rate,
-      voice: Some(DEFAULT_VOICE.into()),
-      _marker: std::marker::PhantomData,
-    }
+    Speak { voice: Some(DEFAULT_VOICE.into()), _marker: std::marker::PhantomData }
   }
 
-  pub fn sample_rate(&self) -> i32 {
-    self.sample_rate
+  fn sample_rate(&self) -> i32 {
+    unsafe { espeak_ng_GetSampleRate() }
   }
 
-  pub fn set_voice(&mut self, voice: &str) -> std::result::Result<(), &'static str> {
+  pub fn set_voice(&mut self, voice: &str) -> std::result::Result<i32, &'static str> {
     if let Some(current_voice) = &self.voice {
       if current_voice == voice {
-        return Ok(());
+        return Ok(self.sample_rate());
       }
     }
 
@@ -90,7 +85,8 @@ impl Speak {
       _ => (Err("An unknown error occurred"), None),
     };
     self.voice = new_voice;
-    res
+
+    res.map(|()| self.sample_rate())
   }
 
   pub fn speak(&mut self, text: &str) -> std::result::Result<AudioStream, &'static str> {

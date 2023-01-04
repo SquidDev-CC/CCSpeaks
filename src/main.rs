@@ -5,13 +5,14 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, StatusCode};
 use listenfd::ListenFd;
 use log::info;
+use opentelemetry::global;
+use opentelemetry::trace::{Span, Tracer};
+use opentelemetry::KeyValue;
 use parking_lot::Mutex;
 use std::convert::Infallible;
-use tracing::{event, span, Level as TLevel};
-use tracing_subscriber::filter::{EnvFilter, LevelFilter};
-use tracing_subscriber::fmt::format::FmtSpan;
 
 mod audio;
+mod monitoring;
 mod speak;
 
 const MAX_SIZE: usize = 512;
@@ -23,11 +24,7 @@ fn bad_request(message: &'static str) -> Response<Body> {
     .unwrap()
 }
 
-fn handle_request(
-  speak: &Mutex<speak::Speak>,
-  sample_rate: usize,
-  request: Request<Body>,
-) -> Response<Body> {
+fn handle_request(speak: &Mutex<speak::Speak>, request: Request<Body>) -> Response<Body> {
   let mut text = None;
   let mut voice = None;
   for (k, v) in form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes()) {
@@ -59,17 +56,17 @@ fn handle_request(
     return bad_request("Voice must be ASCII only.");
   }
 
-  info!("Speaking {:?}", text);
-  let wav = {
+  info!("Speaking {:?} with {:?}", text, voice);
+  let (sample_rate, wav) = {
     let mut speak = speak.lock();
 
-    match speak.set_voice(voice) {
-      Ok(()) => (),
+    let sample_rate = match speak.set_voice(voice) {
+      Ok(rate) => rate,
       Err(err) => return bad_request(err),
-    }
+    };
 
     match speak.speak(text) {
-      Ok(result) => result,
+      Ok(result) => (sample_rate, result),
       Err(e) => {
         return Response::builder()
           .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -93,29 +90,28 @@ fn handle_request(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-  tracing_subscriber::fmt()
-    .with_env_filter(
-      EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy(),
-    )
-    .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
-    .init();
+  monitoring::setup()?;
 
   let speaker = speak::Speak::init();
-  let sample_rate = speaker.sample_rate() as usize;
   let speaker = std::sync::Arc::new(parking_lot::Mutex::new(speaker));
 
   // Look, I don't even know.
-  let make_svc = make_service_fn(|conn: &AddrStream| {
+  let make_svc = make_service_fn(|_conn: &AddrStream| {
     let speaker = speaker.clone();
-    let addr = conn.remote_addr().to_string();
     let fun = service_fn(move |req| {
-      let span = span!(TLevel::INFO, "request", addr = addr);
-      let _enter = span.enter();
+      let parent_cx = global::get_text_map_propagator(|propagator| {
+        propagator.extract(&opentelemetry_http::HeaderExtractor(req.headers()))
+      });
+      let mut span =
+        global::tracer(monitoring::SERVICE_NAME).start_with_context("speak", &parent_cx);
 
-      let res = handle_request(&speaker, sample_rate, req);
-      event!(TLevel::INFO, status = res.status().as_str());
+      let res = handle_request(&speaker, req);
+
+      span.set_attribute(KeyValue::new(
+        opentelemetry_semantic_conventions::trace::HTTP_STATUS_CODE,
+        res.status().as_u16() as i64,
+      ));
+
       async move { Ok::<_, Infallible>(res) }
     });
 

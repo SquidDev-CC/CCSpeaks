@@ -16,6 +16,9 @@
         lib = pkgs.lib;
 
         naersk-lib = pkgs.callPackage naersk { };
+
+        # Remove pcaudio support to avoid pulling in a lot of extra dependencies.
+        espeak-ng = pkgs.espeak-ng.override { pcaudiolibSupport = false; };
       in
       {
         defaultPackage = naersk-lib.buildPackage {
@@ -36,11 +39,13 @@
 
           nativeBuildInputs = [
             pkgs.llvm
+            pkgs.pkg-config
+            pkgs.protobuf
           ];
 
           buildInputs = [
-            pkgs.espeak-ng
             pkgs.glibc
+            espeak-ng
           ];
         };
 
@@ -50,7 +55,7 @@
             pkgs.rustc
             pkgs.rustfmt
             pkgs.rustPackages.clippy
-            pkgs.espeak-ng
+            espeak-ng
           ];
           RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
         };
