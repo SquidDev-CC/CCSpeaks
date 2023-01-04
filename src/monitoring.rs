@@ -35,7 +35,7 @@ impl TextMapPropagator for JaegerExtractor {
 
   fn extract_with_context(&self, cx: &Context, extractor: &dyn Extractor) -> Context {
     fn get_context(extractor: &dyn Extractor) -> Option<SpanContext> {
-      let header_value = extractor.get(&JAEGER_FIELD).unwrap_or("");
+      let header_value = extractor.get(JAEGER_FIELD).unwrap_or("");
       let parts = header_value.split_terminator(':').collect::<Vec<&str>>();
       if parts.len() != 4 {
         return None;

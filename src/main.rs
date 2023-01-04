@@ -6,7 +6,7 @@ use hyper::{Body, Request, Response, StatusCode};
 use listenfd::ListenFd;
 use log::info;
 use opentelemetry::global;
-use opentelemetry::trace::{Span, Tracer};
+use opentelemetry::trace::{Span, SpanBuilder, SpanKind, Tracer};
 use opentelemetry::KeyValue;
 use parking_lot::Mutex;
 use std::convert::Infallible;
@@ -102,8 +102,10 @@ async fn main() -> Result<()> {
       let parent_cx = global::get_text_map_propagator(|propagator| {
         propagator.extract(&opentelemetry_http::HeaderExtractor(req.headers()))
       });
-      let mut span =
-        global::tracer(monitoring::SERVICE_NAME).start_with_context("speak", &parent_cx);
+      let mut span = global::tracer(monitoring::SERVICE_NAME).build_with_context(
+        SpanBuilder::from_name("speak").with_kind(SpanKind::Server),
+        &parent_cx,
+      );
 
       let res = handle_request(&speaker, req);
 
