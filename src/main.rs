@@ -36,7 +36,7 @@ fn handle_request(speak: &Mutex<speak::Speak>, request: Request<Body>) -> Respon
   }
 
   let text: &str = match &text {
-    None => return bad_request("No text= query parameter"),
+    None => return bad_request("No text= query parameter\nhttps://github.com/SquidDev-CC/CCSpeaks#try-it"),
     Some(x) => x,
   };
   let voice = match &voice {
