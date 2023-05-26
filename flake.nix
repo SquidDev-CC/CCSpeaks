@@ -6,9 +6,12 @@
     naersk.inputs.nixpkgs.follows = "nixpkgs";
 
     utils.url = "github:numtide/flake-utils";
+
+    espeak-ng.url = "github:espeak-ng/espeak-ng";
+    espeak-ng.flake = false;
   };
 
-  outputs = { self, nixpkgs, utils, naersk }:
+  outputs = inputs@{ self, nixpkgs, utils, naersk, ... }:
     utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
@@ -18,7 +21,14 @@
         naersk-lib = pkgs.callPackage naersk { };
 
         # Remove pcaudio support to avoid pulling in a lot of extra dependencies.
-        espeak-ng = pkgs.espeak-ng.override { pcaudiolibSupport = false; };
+        # Use trunk, as there's no release containing the fix for https://github.com/espeak-ng/espeak-ng/issues/1271.
+        espeak-ng = (pkgs.espeak-ng.override { pcaudiolibSupport = false; })
+          .overrideAttrs(_: {
+            src = inputs.espeak-ng;
+            patches = [
+              (pkgs.substituteAll { src = ./espeak.patch; mbrola = pkgs.mbrola; })
+            ];
+          });
       in
       {
         defaultPackage = naersk-lib.buildPackage {
