@@ -35,14 +35,10 @@ fn handle_request(speak: &Mutex<speak::Speak>, request: Request<Body>) -> Respon
     }
   }
 
-  let text: &str = match &text {
-    None => return bad_request("No text= query parameter"),
-    Some(x) => x,
+  let Some(text) = text.as_deref() else {
+    return bad_request("No text= query parameter")
   };
-  let voice = match &voice {
-    None => speak::DEFAULT_VOICE,
-    Some(x) => x,
-  };
+  let voice = voice.as_deref().unwrap_or(speak::DEFAULT_VOICE);
 
   if text.len() > MAX_SIZE {
     return bad_request("Text is too long.");

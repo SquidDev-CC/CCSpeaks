@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.66"
-espeakng-sys = "0.1.1"
+espeakng-sys = "0.2.0"
 form_urlencoded = "1.1.0"
 hyper = { version = "0.14.23", features = [ "http1", "server", "tcp"] }
 listenfd = "1.0.0"
