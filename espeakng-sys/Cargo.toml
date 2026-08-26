@@ -1,0 +1,8 @@
+[package]
+name = "espeakng-sys"
+version.workspace = true
+edition.workspace = true
+
+[build-dependencies.bindgen]
+version = "0.72.1"
+default-features = false

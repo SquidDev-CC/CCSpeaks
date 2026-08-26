@@ -1,6 +1,8 @@
-#![allow(non_upper_case_globals)]
-
-use espeakng_sys::*;
+use espeakng_sys::{
+  espeak_AUDIO_OUTPUT, espeak_ERROR, espeak_EVENT, espeak_EVENT_TYPE, espeak_Initialize,
+  espeak_POSITION_TYPE, espeak_SetSynthCallback, espeak_SetVoiceByName, espeak_Synchronize,
+  espeak_Synth, espeak_ng_GetSampleRate, espeak_ng_Terminate, espeakCHARS_AUTO,
+};
 use std::ffi::CString;
 use std::os::raw::{c_int, c_short, c_void};
 
@@ -23,21 +25,23 @@ unsafe extern "C" fn synth_callback(
     return 0;
   }
 
-  let mut buffer = None;
-  loop {
-    if let Some(audio_buffer) = ((*events).user_data as *mut AudioStream).as_mut() {
-      buffer = Some(audio_buffer)
+  unsafe {
+    let mut buffer = None;
+    loop {
+      if let Some(audio_buffer) = ((*events).user_data as *mut AudioStream).as_mut() {
+        buffer = Some(audio_buffer)
+      }
+
+      if (*events).type_ == espeak_EVENT_TYPE::espeakEVENT_LIST_TERMINATED {
+        break;
+      }
+
+      events = events.add(1);
     }
 
-    if (*events).type_ == espeak_EVENT_TYPE_espeakEVENT_LIST_TERMINATED {
-      break;
-    }
-
-    events = events.add(1);
-  }
-
-  if let Some(buffer) = buffer {
-    if sample_count > 0 {
+    if let Some(buffer) = buffer
+      && sample_count > 0
+    {
       buffer.extend_from_slice(std::slice::from_raw_parts(wav, sample_count as usize));
     }
   }
@@ -49,12 +53,12 @@ impl Speak {
   /// Initialise espeak
   pub fn init() -> Self {
     unsafe {
-      espeak_Initialize(espeak_AUDIO_OUTPUT_AUDIO_OUTPUT_SYNCHRONOUS, 0, std::ptr::null(), 0)
+      espeak_Initialize(espeak_AUDIO_OUTPUT::AUDIO_OUTPUT_SYNCHRONOUS, 0, std::ptr::null(), 0)
     };
 
     let voice = CString::new(DEFAULT_VOICE).expect("Failed to convert &str to CString");
     unsafe {
-      if espeak_SetVoiceByName(voice.as_ptr()) != espeak_ERROR_EE_OK {
+      if espeak_SetVoiceByName(voice.as_ptr()) != espeak_ERROR::EE_OK {
         panic!("Failed to set default voice");
       }
 
@@ -69,19 +73,19 @@ impl Speak {
   }
 
   pub fn set_voice(&mut self, voice: &str) -> std::result::Result<i32, &'static str> {
-    if let Some(current_voice) = &self.voice {
-      if current_voice == voice {
-        return Ok(self.sample_rate());
-      }
+    if let Some(current_voice) = &self.voice
+      && current_voice == voice
+    {
+      return Ok(self.sample_rate());
     }
 
-    log::info!("Setting voice to {}", voice);
+    tracing::info!("Setting voice to {}", voice);
     let c_voice = CString::new(voice).map_err(|_| "Invalid language name")?;
     let err = unsafe { espeak_SetVoiceByName(c_voice.as_ptr()) };
 
     let (res, new_voice) = match err {
-      espeak_ERROR_EE_OK => (Ok(()), Some(voice.into())),
-      espeak_ERROR_EE_NOT_FOUND => (Err("Unknown language"), None),
+      espeak_ERROR::EE_OK => (Ok(()), Some(voice.into())),
+      espeak_ERROR::EE_NOT_FOUND => (Err("Unknown language"), None),
       _ => (Err("An unknown error occurred"), None),
     };
     self.voice = new_voice;
@@ -98,7 +102,7 @@ impl Speak {
         text_cstr.as_ptr() as *const c_void,
         0, // Unused with AUDIO_OUTPUT_SYNCHRONOUS
         0,
-        espeak_POSITION_TYPE_POS_CHARACTER,
+        espeak_POSITION_TYPE::POS_CHARACTER,
         0,
         espeakCHARS_AUTO,
         std::ptr::null_mut(),
@@ -107,15 +111,15 @@ impl Speak {
     };
     drop(text_cstr);
 
-    if err == espeak_ERROR_EE_OK {
+    if err == espeak_ERROR::EE_OK {
       err = unsafe { espeak_Synchronize() };
     }
 
     match err {
-      espeak_ERROR_EE_OK => Ok(buf),
-      espeak_ERROR_EE_BUFFER_FULL => Err("Buffer is full"),
-      espeak_ERROR_EE_INTERNAL_ERROR => Err("Internal error"),
-      espeak_ERROR_EE_NOT_FOUND => Err("Audio data not found"),
+      espeak_ERROR::EE_OK => Ok(buf),
+      espeak_ERROR::EE_BUFFER_FULL => Err("Buffer is full"),
+      espeak_ERROR::EE_INTERNAL_ERROR => Err("Internal error"),
+      espeak_ERROR::EE_NOT_FOUND => Err("Audio data not found"),
       _ => Err("An unknown error occurred"),
     }
   }

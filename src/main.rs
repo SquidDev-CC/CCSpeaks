@@ -1,30 +1,32 @@
 use anyhow::Result;
-use hyper::server::conn::AddrStream;
-use hyper::server::Server;
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Request, Response, StatusCode};
-use listenfd::ListenFd;
-use log::info;
-use opentelemetry::global;
-use opentelemetry::trace::{Span, SpanBuilder, SpanKind, Tracer};
-use opentelemetry::KeyValue;
-use parking_lot::Mutex;
+use http_body_util::Full;
+use hyper::body;
+use hyper::service::service_fn;
+use hyper::{Request, Response, StatusCode};
 use std::convert::Infallible;
+use std::sync::Mutex;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod audio;
-mod monitoring;
+mod listenfd;
 mod speak;
 
 const MAX_SIZE: usize = 512;
 
-fn bad_request(message: &'static str) -> Response<Body> {
+fn bad_request(message: &'static str) -> Response<Full<body::Bytes>> {
   Response::builder()
     .status(StatusCode::BAD_REQUEST)
     .body(message.into())
     .unwrap()
 }
 
-fn handle_request(speak: &Mutex<speak::Speak>, request: Request<Body>) -> Response<Body> {
+fn handle_request(
+  speak: &Mutex<speak::Speak>,
+  request: Request<body::Incoming>,
+) -> Response<Full<body::Bytes>> {
   let mut text = None;
   let mut voice = None;
   for (k, v) in form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes()) {
@@ -36,7 +38,7 @@ fn handle_request(speak: &Mutex<speak::Speak>, request: Request<Body>) -> Respon
   }
 
   let Some(text) = text.as_deref() else {
-    return bad_request("No text= query parameter")
+    return bad_request("No text= query parameter");
   };
   let voice = voice.as_deref().unwrap_or(speak::DEFAULT_VOICE);
 
@@ -52,9 +54,9 @@ fn handle_request(speak: &Mutex<speak::Speak>, request: Request<Body>) -> Respon
     return bad_request("Voice must be ASCII only.");
   }
 
-  info!("Speaking {:?} with {:?}", text, voice);
+  tracing::info!("Speaking {:?} with {:?}", text, voice);
   let (sample_rate, wav) = {
-    let mut speak = speak.lock();
+    let mut speak = speak.lock().unwrap();
 
     let sample_rate = match speak.set_voice(voice) {
       Ok(rate) => rate,
@@ -67,7 +69,7 @@ fn handle_request(speak: &Mutex<speak::Speak>, request: Request<Body>) -> Respon
         return Response::builder()
           .status(StatusCode::INTERNAL_SERVER_ERROR)
           .body(format!("Failed to generate audio ({})", e).into())
-          .unwrap()
+          .unwrap();
       }
     }
   };
@@ -86,49 +88,33 @@ fn handle_request(speak: &Mutex<speak::Speak>, request: Request<Body>) -> Respon
 
 #[tokio::main]
 async fn main() -> Result<()> {
-  monitoring::setup()?;
+  tracing_subscriber::registry()
+    .with(tracing_subscriber::fmt::layer())
+    .with(
+      EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy(),
+    )
+    .init();
 
   let speaker = speak::Speak::init();
-  let speaker = std::sync::Arc::new(parking_lot::Mutex::new(speaker));
+  let speaker = std::sync::Arc::new(Mutex::new(speaker));
 
-  // Look, I don't even know.
-  let make_svc = make_service_fn(|_conn: &AddrStream| {
-    let speaker = speaker.clone();
-    let fun = service_fn(move |req| {
-      let parent_cx = global::get_text_map_propagator(|propagator| {
-        propagator.extract(&opentelemetry_http::HeaderExtractor(req.headers()))
-      });
-      let mut span = global::tracer(monitoring::SERVICE_NAME).build_with_context(
-        SpanBuilder::from_name("speak").with_kind(SpanKind::Server),
-        &parent_cx,
-      );
-
-      let res = handle_request(&speaker, req);
-
-      span.set_attribute(KeyValue::new(
-        opentelemetry_semantic_conventions::trace::HTTP_STATUS_CODE,
-        res.status().as_u16() as i64,
-      ));
-
-      async move { Ok::<_, Infallible>(res) }
-    });
-
-    async move { Ok::<_, Infallible>(fun) }
+  let service = service_fn(move |req| {
+    let span = tracing::info_span!(
+      "Request",
+      http.request.method = %req.method(),
+      http.request.path = req.uri().path(),
+      http.response.status_code = tracing::field::Empty,
+      http.response.body.size = tracing::field::Empty,
+    )
+    .entered();
+    let res = handle_request(&speaker, req);
+    span.record("http.response.status_code", res.status().as_u16());
+    async move { Ok::<_, Infallible>(res) }
   });
 
-  // Bind using systemd sockets or an explicitly provided port.
-  let server = if let Some(l) = ListenFd::from_env().take_tcp_listener(0)? {
-    Server::from_tcp(l)?
-  } else if let Some(port) = std::env::var("LISTEN_PORT")
-    .ok()
-    .and_then(|x| x.parse().ok())
-  {
-    Server::bind(&([127, 0, 0, 1], port).into())
-  } else {
-    anyhow::bail!("Must run with LISTENFD or LISTEN_PORT!")
-  };
-
-  server.serve(make_svc).await?;
+  crate::listenfd::serve(service).await?;
 
   Ok(())
 }
